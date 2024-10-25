@@ -27,7 +27,21 @@ public class CircularBuffer<T> {
         this.overwrite = overwrite;
     }
 
-    public boolean add(T element) {
+    public int size() {
+        if (read == write && isFull()) {
+            return capacity;
+        }
+        if (read == write) {
+            return 0;
+        }
+        if (write > read) {
+            return write - read;
+        } else {
+            return capacity - (read - write);
+        }
+    }
+
+    public boolean offer(T element) {
         if (!overwrite && isFull()) {
             return false;
         }
@@ -45,7 +59,7 @@ public class CircularBuffer<T> {
     }
 
     @SuppressWarnings("unchecked")
-    public T get() {
+    public T take() {
         if (isEmpty()) {
             return null;
         }
