@@ -11,6 +11,7 @@ public class CircularBuffer<T> {
     private int read = 0;
     private int write = 0;
     private boolean full = false;
+    private boolean isReadCircleAhead = false;
 
 
     public CircularBuffer(int capacity) {
@@ -32,9 +33,14 @@ public class CircularBuffer<T> {
         }
         elements[write] = element;
         write = (write + 1) % capacity;
+        if (isReadCircleAhead) {
+            read = write;
+        }
         if (write == read) {
             full = true;
+            isReadCircleAhead = true;
         }
+
         return true;
     }
 
@@ -48,6 +54,9 @@ public class CircularBuffer<T> {
         read = (read + 1) % capacity;
         if (read == write) {
             full = false;
+        }
+        if (read > write) {
+            isReadCircleAhead = false;
         }
         return element;
     }
