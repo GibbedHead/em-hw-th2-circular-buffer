@@ -1,6 +1,8 @@
 package ru.chaplyginma.circularbuffer;
 
 import java.util.Arrays;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class CircularBuffer<T> {
 
@@ -8,10 +10,13 @@ public class CircularBuffer<T> {
     private final int capacity;
     private boolean overwrite = false;
 
-    private int read = 0;
-    private int write = 0;
-    private boolean full = false;
-    private boolean isReadCircleAhead = false;
+    private int readIndex = 0;
+    private int writeIndex = 0;
+    private int size = 0;
+
+    private final ReentrantLock lock = new ReentrantLock();
+    private final Condition isFull = lock.newCondition();
+    private final Condition isEmpty = lock.newCondition();
 
 
     public CircularBuffer(int capacity) {
@@ -28,67 +33,105 @@ public class CircularBuffer<T> {
     }
 
     public int size() {
-        if (read == write && isFull()) {
-            return capacity;
-        }
-        if (read == write) {
-            return 0;
-        }
-        if (write > read) {
-            return write - read;
-        } else {
-            return capacity - (read - write);
+        lock.lock();
+        try {
+            return size;
+        } finally {
+            lock.unlock();
         }
     }
 
     public boolean offer(T element) {
-        if (!overwrite && isFull()) {
-            return false;
+        if (element == null) {
+            throw new NullPointerException("Null elements are not permitted");
         }
-        elements[write] = element;
-        write = (write + 1) % capacity;
-        if (isReadCircleAhead) {
-            read = write;
+        lock.lock();
+        try {
+            if (!overwrite && isFull()) {
+                return false;
+            }
+            return addElement(element);
+        } finally {
+            lock.unlock();
         }
-        if (write == read) {
-            full = true;
-            isReadCircleAhead = true;
+    }
+
+    public void put(T element) throws InterruptedException {
+        if (element == null) {
+            throw new NullPointerException("Null elements are not permitted");
+        }
+        lock.lockInterruptibly();
+        try {
+            while (!overwrite && isFull()) {
+                isFull.await();
+            }
+            addElement(element);
+        } finally {
+            lock.unlock();
         }
 
+    }
+
+    public T poll() {
+        lock.lock();
+        try {
+            if (isEmpty()) {
+                return null;
+            }
+            return getElement();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public T take() throws InterruptedException {
+        lock.lockInterruptibly();
+        try {
+            while (isEmpty()) {
+                isEmpty.await();
+            }
+            return getElement();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private boolean isEmpty() {
+        return size == 0;
+    }
+
+    private boolean isFull() {
+        return size == capacity;
+    }
+
+    private boolean addElement(T element) {
+        elements[writeIndex] = element;
+        size = size == capacity ? size : size + 1;
+        writeIndex = (writeIndex + 1) % capacity;
+        if (isFull() && writeIndex >= readIndex) {
+            readIndex = writeIndex;
+        }
+        isEmpty.signal();
         return true;
     }
 
     @SuppressWarnings("unchecked")
-    public T take() {
-        if (isEmpty()) {
-            return null;
-        }
-        T element = (T) elements[read];
-        elements[read] = null;
-        read = (read + 1) % capacity;
-        if (read == write) {
-            full = false;
-        }
-        if (read > write) {
-            isReadCircleAhead = false;
-        }
+    private T getElement() {
+        T element = (T) elements[readIndex];
+        elements[readIndex] = null;
+        size--;
+        readIndex = (readIndex + 1) % capacity;
+        isFull.signal();
         return element;
-    }
-
-    private boolean isEmpty() {
-        return read == write && !full;
-    }
-
-    private boolean isFull() {
-        return read == write && full;
     }
 
     @Override
     public String toString() {
         return "CircularBuffer{" +
                 "elements=" + Arrays.toString(elements) +
-                ", read=" + read +
-                ", write=" + write +
+                ", readIndex=" + readIndex +
+                ", writeIndex=" + writeIndex +
+                ", size=" + size +
                 '}';
     }
 }
