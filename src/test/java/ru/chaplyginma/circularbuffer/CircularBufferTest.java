@@ -1,12 +1,17 @@
 package ru.chaplyginma.circularbuffer;
 
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import static java.time.Duration.ofMillis;
+import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -25,6 +30,17 @@ class CircularBufferTest {
         assertThatThrownBy(() -> new CircularBuffer<String>(0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    @DisplayName("Single thread: Adding null element should throw NullPointerException")
+    void givenNullElement_whenOffer_thenThrowNullPointerException() {
+        CircularBuffer<String> buffer = new CircularBuffer<>(10);
+
+        assertThatThrownBy(() -> buffer.offer(null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessage("Null elements are not permitted");
+    }
+
 
     @Test
     @DisplayName("Single thread: 2 inserts and 3 reads. Should return 2 inserted values and null")
@@ -157,8 +173,76 @@ class CircularBufferTest {
     }
 
     @Test
+    @DisplayName("Multi thread: empty buffer poll")
+    void givenEmptyBuffer_whenPoll_thenReturnFalse() {
+        CircularBuffer<Integer> buffer = new CircularBuffer<>(2);
+
+        Integer r = buffer.poll();
+
+        assertThat(r).isNull();
+    }
+
+    @Test
+    @DisplayName("Multi thread: empty buffer take wait for buffer fill")
+    void givenEmptyBuffer_whenTake_thenThreadWait() throws InterruptedException {
+        CircularBuffer<Integer> buffer = new CircularBuffer<>(1);
+
+        Thread consumerThread = new Thread(() -> {
+            try {
+                buffer.take();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+
+        consumerThread.start();
+
+        Awaitility.await()
+                .timeout(ofSeconds(5))
+                .pollInterval(ofMillis(100))
+                .until(() -> consumerThread.getState() == Thread.State.WAITING);
+
+        assertThat(consumerThread.getState())
+                .withFailMessage("Consumer thread should be waiting on empty buffer")
+                .isEqualTo(Thread.State.WAITING);
+
+        consumerThread.interrupt();
+        consumerThread.join();
+    }
+
+    @Test
+    @DisplayName("Multi thread: full buffer put wait for buffer empty")
+    void givenFullBuffer_whenPut_thenThreadWait() throws InterruptedException {
+        CircularBuffer<Integer> buffer = new CircularBuffer<>(1);
+
+        buffer.put(1);
+
+        Thread producerThread = new Thread(() -> {
+            try {
+                buffer.put(2);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+
+        producerThread.start();
+
+        Awaitility.await()
+                .timeout(ofSeconds(5))
+                .pollInterval(ofMillis(100))
+                .until(() -> producerThread.getState() == Thread.State.WAITING);
+
+        assertThat(producerThread.getState())
+                .withFailMessage("Producer thread should be waiting on full buffer")
+                .isEqualTo(Thread.State.WAITING);
+
+        producerThread.interrupt();
+        producerThread.join();
+    }
+
+    @Test
     @DisplayName("Multi thread: Adding/removing same amount of times should return size 0")
-    void givenAddingAndRemovingSameTimes_whenSize_thenReturn0() {
+    void givenAddingAndRemovingSameTimes_whenSize_thenReturnZero() {
         int capacity = 10;
         int iterations = 100_000;
         int threads = 5;
@@ -203,6 +287,55 @@ class CircularBufferTest {
         System.out.println(buffer);
 
         assertThat(buffer.size()).isZero();
+    }
+
+    @Test
+    @DisplayName("Multi thread: When overwrite is on, oldest element should be overwritten")
+    void givenOverwriteOn_whenAddingInMultipleThreads_thenOldestElementShouldBeOverwritten() {
+        int capacity = 10;
+        int elementsPut = 15;
+        CircularBuffer<Integer> buffer = new CircularBuffer<>(capacity, true);
+
+        List<Integer> oldestElements = new ArrayList<>();
+
+        Runnable producerThread = () -> {
+            for (int i = 0; i < elementsPut; i++) {
+                try {
+                    buffer.put(i);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        };
+
+        Runnable consumerThread = () -> {
+            for (int i = 0; i < 5; i++) {
+                try {
+                    oldestElements.add(buffer.take());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        };
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            pool.submit(producerThread);
+            pool.submit(consumerThread);
+
+            pool.shutdown();
+
+            Awaitility.await()
+                    .timeout(ofSeconds(5))
+                    .pollInterval(ofMillis(100))
+                    .until(pool::isTerminated);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        List<Integer> expectedValues = List.of(5, 6, 7, 8, 9);
+
+        assertThat(oldestElements).containsExactlyInAnyOrder(expectedValues.toArray(Integer[]::new));
     }
 
 }
